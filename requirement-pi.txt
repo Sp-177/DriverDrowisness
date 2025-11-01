@@ -1,0 +1,14 @@
+# Lightweight ONNX Runtime (for inference only)
+onnxruntime>=1.16.0
+
+# Image handling
+opencv-python
+Pillow
+numpy
+
+# Utilities
+tqdm
+colorama
+
+# Compatibility fix for Raspberry Pi
+protobuf==3.20.3
