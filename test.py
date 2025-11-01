@@ -21,7 +21,7 @@ CLASS_NAMES = [
 ]
 
 # =======================================================
-# MODEL DEFINITION (same as training)
+# MODEL
 # =======================================================
 class DrowsinessCNN(nn.Module):
     def __init__(self, num_classes=6):
@@ -55,6 +55,7 @@ class DrowsinessCNN(nn.Module):
         x = torch.flatten(x, 1)
         return self.classifier(x)
 
+
 # =======================================================
 # LOAD MODEL
 # =======================================================
@@ -74,18 +75,22 @@ transform = transforms.Compose([
 ])
 
 # =======================================================
-# OPEN CAMERA
+# FACE DETECTOR
 # =======================================================
-cap = cv2.VideoCapture(0)  # 0 = default webcam
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
+# =======================================================
+# CAMERA
+# =======================================================
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print(Fore.RED + "❌ Could not open webcam!" + Style.RESET_ALL)
     exit()
 
-print(Fore.CYAN + "🎥 Starting real-time detection... Press 'q' to quit." + Style.RESET_ALL)
+print(Fore.CYAN + "🎥 Starting detection... Press 'q' to quit." + Style.RESET_ALL)
 
 # =======================================================
-# LIVE LOOP
+# LOOP
 # =======================================================
 while True:
     ret, frame = cap.read()
@@ -93,26 +98,41 @@ while True:
         print(Fore.YELLOW + "[WARN] Frame not captured!" + Style.RESET_ALL)
         continue
 
-    # Convert to PIL
-    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img_pil = Image.fromarray(img)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
-    # Transform
-    img_tensor = transform(img_pil).unsqueeze(0).to(device)
+    for (x, y, w, h) in faces:
+        # Crop face
+        face_img = frame[y:y+h, x:x+w]
+        if face_img.size == 0:
+            continue
 
-    # Predict
-    with torch.no_grad():
-        outputs = model(img_tensor)
-        _, predicted = outputs.max(1)
-        label = CLASS_NAMES[predicted.item()]
+        # Convert and preprocess
+        img_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(img_rgb)
+        img_tensor = transform(img_pil).unsqueeze(0).to(device)
 
-    # Overlay prediction
-    cv2.putText(frame, f"State: {label}", (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
+        # Predict
+        with torch.no_grad():
+            outputs = model(img_tensor)
+            _, predicted = outputs.max(1)
+            label = CLASS_NAMES[predicted.item()]
+
+        # Color code based on alert
+        if label in ["SleepyDriving", "Yawn"]:
+            color = (0, 0, 255)   # 🔴 red warning
+        elif label in ["Drinking", "Distracted"]:
+            color = (0, 165, 255) # 🟠 orange warning
+        else:
+            color = (0, 255, 0)   # 🟢 safe
+
+        # Draw box + label
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+        cv2.putText(frame, f"{label}", (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
     cv2.imshow("Driver Drowsiness Detection", frame)
 
-    # Exit
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
