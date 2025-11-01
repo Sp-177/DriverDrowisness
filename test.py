@@ -9,7 +9,7 @@ from colorama import Fore, Style
 # =======================================================
 # CONFIG
 # =======================================================
-MODEL_PATH = "driver_drowsiness_final.pth"
+MODEL_PATH = "model/driver_drowsiness_final.pth"
 IMG_SIZE = 128
 CLASS_NAMES = [
     "DangerousDriving",
