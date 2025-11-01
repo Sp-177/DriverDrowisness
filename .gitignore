@@ -1,0 +1,200 @@
+# =====================================
+# Universal .gitignore for Web + AI/ML + C++ + Node + Env
+# =====================================
+
+# --- OS / Editor Files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+venv/
+env/
+ENV/
+.venv/
+.ipynb_checkpoints/
+*.ipynb_convert/
+*.pkl
+*.h5
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# --- Node / React / Web ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.pnpm-debug.log*
+.next/
+out/
+coverage/
+.cache/
+build/
+dist/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- C++ / Build Artifacts ---
+*.out
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.lib
+*.class
+*.manifest
+*.pdb
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+build/
+bin/
+lib/
+
+# --- Jupyter / Colab ---
+*.ipynb_checkpoints/
+.ipynb_convert/
+*.nbconvert/
+*.nb.html
+*.nbconvert.ipynb
+
+# --- AI / ML Models / Data ---
+runs/
+checkpoints/
+models/
+weights/
+logs/
+wandb/
+lightning_logs/
+tensorboard/
+mlruns/
+experiments/
+data/
+datasets/
+__results__/
+__results___files/
+*.tfrecord
+*.npz
+*.npy
+*.csv
+*.tsv
+*.jsonl
+
+# --- Images / Media (optional) ---
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.tiff
+*.ico
+
+# --- Temporary / Cache ---
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.lock
+.cache/
+__cache__/
+.tmp/
+.local/
+*.tar
+*.zip
+*.rar
+*.7z
+
+# --- Logs / Debug / Reports ---
+*.log
+*.out
+*.err
+*.trace
+*.prof
+*.coverage
+
+# --- VS Code / JetBrains / Misc ---
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# --- System files ---
+ehthumbs.db
+Icon?
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Security ---
+*.pem
+*.key
+*.crt
+*.pub
+*.ppk
+*.credentials
+*.secrets
+*.token
+*.cert
+*.p12
+
+# --- Backup / Misc ---
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*.tmp
+*.swp
+*.swo
+
+# --- Testing / Reports ---
+coverage/
+htmlcov/
+*.coverage
+*.cov
+*.lcov
+nosetests.xml
+coverage.xml
+*.mocha.json
+
+# --- IDE Config ---
+.spyproject/
+.pydevproject
+*.sublime-project
+*.sublime-workspace
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
