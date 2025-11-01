@@ -1,4 +1,3 @@
-import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -6,6 +5,11 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 from colorama import Fore, Style
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from models.cnn_model import DrowsinessCNN
+
 
 from models.cnn_model import DrowsinessCNN
 from scripts.dataset_loader import DriverDrowsinessDataset
