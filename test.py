@@ -1,21 +1,17 @@
-import os
+import cv2
 import torch
-import torchvision.models as models
-import torchvision.transforms as transforms
+import torch.nn as nn
+from torchvision import transforms
 from PIL import Image
-from sklearn.metrics import classification_report, confusion_matrix
 import numpy as np
+from colorama import Fore, Style
 
-# ==============================
+# =======================================================
 # CONFIG
-# ==============================
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
-MODEL_PATH = "checkpoints/face_model.pth"
-VALID_DIR = "dataset/valid"
-ANNOTATION_PATH = os.path.join(VALID_DIR, "_annotations.txt")
-
-class_names = [
+# =======================================================
+MODEL_PATH = "driver_drowsiness_final.pth"
+IMG_SIZE = 128
+CLASS_NAMES = [
     "DangerousDriving",
     "Distracted",
     "Drinking",
@@ -24,74 +20,102 @@ class_names = [
     "Yawn"
 ]
 
-# ==============================
+# =======================================================
+# MODEL DEFINITION (same as training)
+# =======================================================
+class DrowsinessCNN(nn.Module):
+    def __init__(self, num_classes=6):
+        super(DrowsinessCNN, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.4),
+            nn.Linear(128 * (IMG_SIZE // 8) * (IMG_SIZE // 8), 256),
+            nn.ReLU(),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = torch.flatten(x, 1)
+        return self.classifier(x)
+
+# =======================================================
 # LOAD MODEL
-# ==============================
-model = models.resnet18(weights=None)
-num_features = model.fc.in_features
-model.fc = torch.nn.Linear(num_features, len(class_names))
-
-state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
-model.load_state_dict(state_dict)
-model = model.to(DEVICE)
+# =======================================================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = DrowsinessCNN(num_classes=len(CLASS_NAMES)).to(device)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.eval()
+print(Fore.GREEN + f"✅ Model loaded from {MODEL_PATH}" + Style.RESET_ALL)
 
-# ==============================
-# TRANSFORM
-# ==============================
+# =======================================================
+# TRANSFORMS
+# =======================================================
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
 ])
 
-# ==============================
-# LOAD VALIDATION SAMPLES
-# ==============================
-images, labels = [], []
-with open(ANNOTATION_PATH, 'r') as f:
-    lines = f.readlines()
+# =======================================================
+# OPEN CAMERA
+# =======================================================
+cap = cv2.VideoCapture(0)  # 0 = default webcam
 
-for line in lines:
-    parts = line.strip().split()
-    if len(parts) < 2:
+if not cap.isOpened():
+    print(Fore.RED + "❌ Could not open webcam!" + Style.RESET_ALL)
+    exit()
+
+print(Fore.CYAN + "🎥 Starting real-time detection... Press 'q' to quit." + Style.RESET_ALL)
+
+# =======================================================
+# LIVE LOOP
+# =======================================================
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print(Fore.YELLOW + "[WARN] Frame not captured!" + Style.RESET_ALL)
         continue
-    img_name = parts[0]
-    coords = parts[1].split(',')
-    if len(coords) != 5:
-        continue
-    x_min, y_min, x_max, y_max, class_id = map(float, coords)
-    img_path = os.path.join(VALID_DIR, img_name)
-    if not os.path.exists(img_path):
-        continue
 
-    image = Image.open(img_path).convert("RGB")
-    image = image.crop((int(x_min), int(y_min), int(x_max), int(y_max)))
-    image = transform(image)
-    images.append(image)
-    labels.append(int(class_id))
+    # Convert to PIL
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img)
 
-# ==============================
-# VALIDATION LOOP
-# ==============================
-print(f"🔍 Validating {len(images)} images...")
+    # Transform
+    img_tensor = transform(img_pil).unsqueeze(0).to(device)
 
-X = torch.stack(images).to(DEVICE)
-y_true = torch.tensor(labels).to(DEVICE)
+    # Predict
+    with torch.no_grad():
+        outputs = model(img_tensor)
+        _, predicted = outputs.max(1)
+        label = CLASS_NAMES[predicted.item()]
 
-with torch.no_grad():
-    outputs = model(X)
-    preds = torch.argmax(outputs, dim=1)
+    # Overlay prediction
+    cv2.putText(frame, f"State: {label}", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
 
-y_true_cpu = y_true.cpu().numpy()
-y_pred_cpu = preds.cpu().numpy()
+    cv2.imshow("Driver Drowsiness Detection", frame)
 
-# ==============================
-# RESULTS
-# ==============================
-print("\n✅ Validation Complete!\n")
-print(classification_report(y_true_cpu, y_pred_cpu, target_names=class_names))
-print("Confusion Matrix:\n", confusion_matrix(y_true_cpu, y_pred_cpu))
+    # Exit
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+print(Fore.BLUE + "🛑 Camera closed." + Style.RESET_ALL)
