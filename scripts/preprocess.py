@@ -3,6 +3,9 @@ import cv2
 import pandas as pd
 from tqdm import tqdm
 from colorama import Fore, Style
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 def preprocess_dataset(dataset_root):
     """
