@@ -2,6 +2,11 @@ import os, cv2, numpy as np, pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset
 from colorama import Fore, Style
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from models.cnn_model import DrowsinessCNN
+
 
 class DriverDrowsinessDataset(Dataset):
     def __init__(self, folder_path, transform=None):
