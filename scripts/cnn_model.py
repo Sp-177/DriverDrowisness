@@ -46,7 +46,7 @@ class CBAM(nn.Module):
 # ==========================================================
 class DrowsinessCNN(nn.Module):
     def __init__(self, num_classes=6, dropout=0.4):
-        super(DrowsinessCNN_Pro, self).__init__()
+        super(DrowsinessCNN, self).__init__()
 
         def conv_block(in_ch, out_ch, pool=True):
             layers = [
@@ -104,7 +104,7 @@ class DrowsinessCNN(nn.Module):
 # Model Summary Test
 # ==========================================================
 if __name__ == "__main__":
-    model = DrowsinessCNN_Pro(num_classes=6)
+    model = DrowsinessCNN(num_classes=6)
     dummy = torch.randn(4, 3, 128, 128)
     out = model(dummy)
     total_params = sum(p.numel() for p in model.parameters()) / 1_000_000
