@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# --- Squeeze-and-Excitation (Attention Block) ---
+# ==========================================================
+# Squeeze-and-Excitation (Attention Block)
+# ==========================================================
 class SEBlock(nn.Module):
     def __init__(self, channels, reduction=16):
         super(SEBlock, self).__init__()
@@ -18,10 +20,33 @@ class SEBlock(nn.Module):
         return x * y
 
 
-# --- Main CNN Model ---
-class DrowsinessCNN_Best(nn.Module):
+# ==========================================================
+# CBAM (Convolutional Block Attention Module)
+# ==========================================================
+class CBAM(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super(CBAM, self).__init__()
+        self.channel_att = SEBlock(channels, reduction)
+        self.spatial_att = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.channel_att(x)
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        spatial = torch.cat([avg_out, max_out], dim=1)
+        spatial = self.spatial_att(spatial)
+        return x * spatial
+
+
+# ==========================================================
+# Enhanced CNN Model for Drowsiness Detection
+# ==========================================================
+class DrowsinessCNN(nn.Module):
     def __init__(self, num_classes=6, dropout=0.4):
-        super(DrowsinessCNN_Best, self).__init__()
+        super(DrowsinessCNN_Pro, self).__init__()
 
         def conv_block(in_ch, out_ch, pool=True):
             layers = [
@@ -33,26 +58,27 @@ class DrowsinessCNN_Best(nn.Module):
                 layers.append(nn.MaxPool2d(2, 2))
             return nn.Sequential(*layers)
 
-        # --- Feature extractor with attention ---
+        # Feature extraction backbone with attention
         self.features = nn.Sequential(
             conv_block(3, 32),
-            SEBlock(32),
+            CBAM(32),
             conv_block(32, 64),
-            SEBlock(64),
+            CBAM(64),
             conv_block(64, 128),
-            SEBlock(128),
+            CBAM(128),
             conv_block(128, 256),
-            SEBlock(256)
+            CBAM(256)
         )
 
-        # --- Global Average Pooling ---
+        # Global Average Pooling
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
 
-        # --- Classifier ---
+        # Classifier
         self.classifier = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
+            nn.BatchNorm1d(128),
             nn.Dropout(dropout / 2),
             nn.Linear(128, num_classes)
         )
@@ -74,9 +100,13 @@ class DrowsinessCNN_Best(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
+# ==========================================================
+# Model Summary Test
+# ==========================================================
 if __name__ == "__main__":
-    model = DrowsinessCNN_Best(num_classes=6)
+    model = DrowsinessCNN_Pro(num_classes=6)
     dummy = torch.randn(4, 3, 128, 128)
     out = model(dummy)
+    total_params = sum(p.numel() for p in model.parameters()) / 1_000_000
     print("✅ Output shape:", out.shape)
-    print("✅ Total parameters:", sum(p.numel() for p in model.parameters()) // 1_000, "K")
+    print(f"✅ Total parameters: {total_params:.2f}M")
