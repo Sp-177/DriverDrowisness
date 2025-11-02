@@ -99,7 +99,8 @@ while True:
         continue
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+    color =cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    faces = face_cascade.detectMultiScale(color, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
     for (x, y, w, h) in faces:
         # Crop face
