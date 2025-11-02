@@ -1,5 +1,5 @@
 # ==========================================================
-# 🚗 DRIVER DROWSINESS DETECTION — Raspberry Pi 4 (Live)
+# 📘 DRIVER DROWSINESS DETECTION — REAL-TIME PI TEST SCRIPT
 # Model: driver_drowisness.onnx
 # Author: Shubham Patel (NIT Raipur)
 # ==========================================================
@@ -11,171 +11,224 @@ import RPi.GPIO as GPIO
 import time
 from datetime import datetime
 
-# ==========================================================
-# 🔧 GPIO SETUP
-# ==========================================================
-LED_GREEN = 17   # Safe
-LED_YELLOW = 27  # Distracted / Yawn
-LED_RED = 22     # Sleepy / Dangerous
-BUZZER = 23      # Buzzer
-
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
-for pin in [LED_GREEN, LED_YELLOW, LED_RED, BUZZER]:
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)
-
-# ==========================================================
-# 🧩 ONNX MODEL LOADING
-# ==========================================================
-MODEL_PATH = "driver_drowisness.onnx"
-
-print("[INFO] Loading ONNX model...")
-session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-input_name = session.get_inputs()[0].name
-print("[INFO] Model loaded successfully.")
-
-CLASSES = [
-    "DangerousDriving",
-    "Distracted",
-    "Drinking",
-    "SafeDriving",
-    "SleepyDriving",
-    "Yawn"
-]
-
-# ==========================================================
-# 📷 CAMERA INITIALIZATION
-# ==========================================================
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-if not cap.isOpened():
-    raise RuntimeError("❌ Could not access camera. Check USB connection.")
-
-print("[INFO] Camera initialized successfully.")
-
-# ==========================================================
-# 📡 FIREBASE (COMMENTED OUT)
-# ==========================================================
+# ----------------------------------------------------------
+# ⚙️ OPTIONAL: Firebase setup (commented out)
+# ----------------------------------------------------------
 """
 import firebase_admin
 from firebase_admin import credentials, db
 
-cred = credentials.Certificate("path/to/firebase-key.json")
+cred = credentials.Certificate("/home/pi/firebase-key.json")
 firebase_admin.initialize_app(cred, {
-    "databaseURL": "https://your-project.firebaseio.com/"
+    "databaseURL": "https://<your-project>.firebaseio.com/"
 })
-ref = db.reference("driver_status")
-"""
+ref = db.reference("DriverAlerts")
 
-def send_to_firebase(state):
-    """
-    Uncomment firebase block above and ref.push() below
-    to enable realtime alert sync.
-    """
-    data = {
+def send_firebase_alert(state):
+    ref.push({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "state": state,
-        "caution": "Driver inactive or same state for long!"
-    }
-    # ref.push(data)
-    print("[Firebase] Would send:", data)
+        "message": f"⚠️ Driver state: {state}"
+    })
+"""
 
-# ==========================================================
-# ⚡ GPIO CONTROL FUNCTIONS
-# ==========================================================
-def set_leds(green=False, yellow=False, red=False):
-    GPIO.output(LED_GREEN, GPIO.HIGH if green else GPIO.LOW)
-    GPIO.output(LED_YELLOW, GPIO.HIGH if yellow else GPIO.LOW)
-    GPIO.output(LED_RED, GPIO.HIGH if red else GPIO.LOW)
+# ----------------------------------------------------------
+# 🧠 MODEL LOADING
+# ----------------------------------------------------------
+MODEL_PATH = "/home/raspberrypi/Desktop/Driver_Drowisness/driver_drowsiness.onnx"
+INPUT_SIZE = 128  # must match your training size
+CLASSES = ["Safe", "Sleepy", "Drinking", "Distracted", "Dangerous"]
 
-def buzz(freq_hz=3, duration=0.5):
-    """Generate buzzer beep of given frequency and duration."""
-    if freq_hz <= 0:
-        return
-    period = 1.0 / freq_hz
-    end_time = time.time() + duration
-    while time.time() < end_time:
+print("[INFO] Loading ONNX model...")
+try:
+    session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+    input_name = session.get_inputs()[0].name
+    print("[INFO] Model loaded successfully.")
+except Exception as e:
+    print(f"❌ Error loading model: {e}")
+    exit(1)
+
+# ----------------------------------------------------------
+# 🎛️ GPIO SETUP (FIXED PIN ASSIGNMENTS)
+# ----------------------------------------------------------
+LED_RED = 17     # Danger - GPIO17 (FLIPPED ORDER)
+LED_YELLOW = 27  # Warning - GPIO27
+LED_GREEN = 22   # Safe - GPIO22 (FLIPPED ORDER)
+BUZZER = 23      # Buzzer - GPIO23
+
+# Clean up any previous GPIO settings
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+
+# Setup all pins as output
+for pin in [LED_GREEN, LED_YELLOW, LED_RED, BUZZER]:
+    GPIO.setup(pin, GPIO.OUT)
+    GPIO.output(pin, GPIO.LOW)
+
+print("[INFO] GPIO configured successfully.")
+print(f"[INFO] Pin mapping: GREEN={LED_GREEN}, YELLOW={LED_YELLOW}, RED={LED_RED}, BUZZER={BUZZER}")
+
+# ----------------------------------------------------------
+# 🎥 CAMERA INIT (IMPROVED ERROR HANDLING)
+# ----------------------------------------------------------
+print("[INFO] Initializing camera...")
+cap = cv2.VideoCapture(0)
+
+# Wait a moment for camera to initialize
+time.sleep(2)
+
+if not cap.isOpened():
+    print("❌ Error: Could not open camera.")
+    print("   Try running: sudo modprobe bcm2835-v4l2")
+    GPIO.cleanup()
+    exit(1)
+
+# Set camera properties for better performance
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FPS, 30)
+
+print("[INFO] Camera initialized successfully.")
+
+# ----------------------------------------------------------
+# 🔁 STATE CONTROL LOGIC (IMPROVED)
+# ----------------------------------------------------------
+def control_gpio(state):
+    """Control LEDs and buzzer based on driver state"""
+    # Reset all outputs
+    GPIO.output(LED_GREEN, GPIO.LOW)
+    GPIO.output(LED_YELLOW, GPIO.LOW)
+    GPIO.output(LED_RED, GPIO.LOW)
+    GPIO.output(BUZZER, GPIO.LOW)
+
+    if state == "Safe":
+        GPIO.output(LED_GREEN, GPIO.HIGH)
+
+    elif state == "Sleepy":
+        GPIO.output(LED_YELLOW, GPIO.HIGH)
+        # Short beep
         GPIO.output(BUZZER, GPIO.HIGH)
-        time.sleep(period / 2)
+        time.sleep(0.15)
         GPIO.output(BUZZER, GPIO.LOW)
-        time.sleep(period / 2)
 
-# ==========================================================
-# 🧠 INFERENCE LOOP
-# ==========================================================
-prev_state = None
-last_alert_time = time.time()
+    elif state in ["Drinking", "Distracted"]:
+        GPIO.output(LED_YELLOW, GPIO.HIGH)
+        # Medium beep
+        GPIO.output(BUZZER, GPIO.HIGH)
+        time.sleep(0.25)
+        GPIO.output(BUZZER, GPIO.LOW)
 
+    elif state == "Dangerous":
+        GPIO.output(LED_RED, GPIO.HIGH)
+        # Triple beep pattern
+        for _ in range(3):
+            GPIO.output(BUZZER, GPIO.HIGH)
+            time.sleep(0.15)
+            GPIO.output(BUZZER, GPIO.LOW)
+            time.sleep(0.1)
+
+# ----------------------------------------------------------
+# 🚀 REAL-TIME INFERENCE LOOP
+# ----------------------------------------------------------
 print("[INFO] Starting live detection... (press 'q' to quit)")
+print("[INFO] Press Ctrl+C to stop the program safely")
+
+last_state = None
+last_alert_time = 0
+frame_count = 0
+start_time = time.time()
 
 try:
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("[WARN] Frame capture failed, retrying...")
+            print("⚠️ Warning: Frame not captured, retrying...")
+            time.sleep(0.1)
             continue
 
-        # -------- Preprocessing --------
-        img = cv2.resize(frame, (224, 224))
-        img = img.astype(np.float32) / 255.0
-        img = np.transpose(img, (2, 0, 1))
-        img = np.expand_dims(img, axis=0)
+        frame_count += 1
 
-        # -------- Inference --------
-        preds = session.run(None, {input_name: img})[0]
-        state = CLASSES[np.argmax(preds)]
+        # --- Preprocess frame for ONNX ---
+        img_resized = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        img = img_rgb.astype(np.float32) / 255.0
+        img = np.transpose(img, (2, 0, 1))  # HWC → CHW
+        img = np.expand_dims(img, axis=0)   # add batch dimension
+        img = np.ascontiguousarray(img)
 
-        # -------- Display --------
-        color_map = {
-            "SafeDriving": (0, 255, 0),
-            "Distracted": (0, 255, 255),
-            "Drinking": (255, 255, 0),
-            "Yawn": (0, 165, 255),
-            "SleepyDriving": (0, 0, 255),
-            "DangerousDriving": (0, 0, 128),
-        }
-        cv2.putText(frame, f"State: {state}", (20, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, color_map.get(state, (255, 255, 255)), 2)
+        # --- Run inference ---
+        try:
+            preds = session.run(None, {input_name: img})[0]
+            pred_class = np.argmax(preds)
+            confidence = preds[0][pred_class]
+            state = CLASSES[pred_class]
+        except Exception as e:
+            print(f"⚠️ Inference error: {e}")
+            continue
+
+        # --- Display info on frame ---
+        cv2.putText(frame, f"State: {state}", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(frame, f"Confidence: {confidence:.2f}", (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        # Calculate and display FPS
+        elapsed = time.time() - start_time
+        fps = frame_count / elapsed if elapsed > 0 else 0
+        cv2.putText(frame, f"FPS: {fps:.1f}", (20, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # --- Show frame ---
         cv2.imshow("Driver Drowsiness Detection", frame)
 
-        # -------- State Logic --------
-        current_time = time.time()
-        if state != prev_state:
-            prev_state = state
-            last_alert_time = current_time
+        # --- Control GPIO ---
+        control_gpio(state)
 
-            # SAFE
-            if state == "SafeDriving":
-                set_leds(green=True)
-                buzz(1, 0.1)
+        # --- Firebase alert (commented out) ---
+        """
+        now = time.time()
+        if state != last_state or (now - last_alert_time) > 10:
+            send_firebase_alert(state)
+            last_state = state
+            last_alert_time = now
+        """
 
-            # MID ALERTS
-            elif state in ["Distracted", "Drinking", "Yawn"]:
-                set_leds(yellow=True)
-                buzz(3, 0.4)
-
-            # HIGH ALERT
-            elif state in ["SleepyDriving", "DangerousDriving"]:
-                set_leds(red=True)
-                buzz(8, 1.0)
-
-        # Send Firebase alert if same state > 15s
-        elif current_time - last_alert_time > 15:
-            send_to_firebase(state)
-            last_alert_time = current_time
-
-        # Exit key
+        # Exit on 'q' key
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("\n[INFO] 'q' pressed - exiting...")
             break
 
 except KeyboardInterrupt:
-    print("\n[INFO] Interrupted by user. Cleaning up...")
+    print("\n[INFO] Interrupted by user (Ctrl+C)")
+
+except Exception as e:
+    print(f"\n❌ Unexpected error: {e}")
+    import traceback
+    traceback.print_exc()
 
 finally:
-    cap.release()
+    # --- Cleanup ---
+    print("[INFO] Cleaning up resources...")
+
+    # Turn off all GPIO outputs before cleanup
+    try:
+        GPIO.output(LED_GREEN, GPIO.LOW)
+        GPIO.output(LED_YELLOW, GPIO.LOW)
+        GPIO.output(LED_RED, GPIO.LOW)
+        GPIO.output(BUZZER, GPIO.LOW)
+    except:
+        pass
+
+    # Release camera
+    if cap.isOpened():
+        cap.release()
+
+    # Close windows
     cv2.destroyAllWindows()
+
+    # Cleanup GPIO
     GPIO.cleanup()
-    print("[INFO] GPIO released. Program terminated successfully.")
+
+    print("[INFO] GPIO released. Camera closed.")
+    print("[INFO] Program terminated successfully.")
+    print(f"[INFO] Total frames processed: {frame_count}")
