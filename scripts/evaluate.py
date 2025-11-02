@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from models.cnn_model import DrowsinessCNN
+from scripts.cnn_model import DrowsinessCNN
 from dataset_loader import DriverDrowsinessDataset
 from colorama import Fore, Style
 
