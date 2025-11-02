@@ -1,53 +1,92 @@
 import os
+import sys
 import torch
 from colorama import Fore, Style
-import sys, os
+
+# ==========================================================
+# IMPORTS & PATH SETUP
+# ==========================================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from scripts.cnn_model import DrowsinessCNN  # Attention-enhanced model
 
-from scripts.cnn_model import DrowsinessCNN
 
-# ==========================================
+# ==========================================================
 # CONFIGURATION
-# ==========================================
-MODEL_PATH = "models/driver_drowsiness_final.pth"
-ONNX_PATH = "models/driver_drowsiness.onnx"
+# ==========================================================
+MODEL_PATH = "models/DrwoisnessCNN_Pro.pth"
+ONNX_PATH = "models/DrwoisnessCNN_Pro.onnx"
 IMG_SIZE = 128
 NUM_CLASSES = 6
 
-# ==========================================
-# CONVERT TO ONNX
-# ==========================================
-def convert_model_to_onnx():
-    # Check if model file exists
+
+# ==========================================================
+# ONNX CONVERSION FUNCTION
+# ==========================================================
+def convert_to_onnx():
+    # --- Check model existence ---
     if not os.path.exists(MODEL_PATH):
-        print(Fore.RED + f"❌ Model file not found: {MODEL_PATH}" + Style.RESET_ALL)
+        print(Fore.RED + f"❌ Model not found at: {MODEL_PATH}" + Style.RESET_ALL)
         return
 
-    # Load trained model
-    print(Fore.CYAN + "🔹 Loading PyTorch model..." + Style.RESET_ALL)
-    model = DrowsinessCNN(num_classes=NUM_CLASSES, img_size=IMG_SIZE)
+    # --- Load model ---
+    print(Fore.CYAN + "🔹 Loading trained DrwoisnessCNN_Pro model..." + Style.RESET_ALL)
+    model = DrowsinessCNN(num_classes=NUM_CLASSES)
     model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
     model.eval()
 
-    # Create a dummy input (for model tracing)
+    # --- Create dummy input ---
     dummy_input = torch.randn(1, 3, IMG_SIZE, IMG_SIZE)
 
-    # Export to ONNX
+    # --- Display info ---
+    total_params = sum(p.numel() for p in model.parameters()) / 1_000_000
+    print(Fore.BLUE + f"ℹ️  Model Parameters: {total_params:.2f}M" + Style.RESET_ALL)
+
+    # --- Export to ONNX ---
     print(Fore.YELLOW + "⚙️  Converting model to ONNX format..." + Style.RESET_ALL)
     torch.onnx.export(
         model,
         dummy_input,
         ONNX_PATH,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
-        opset_version=11
+        input_names=["input_image"],
+        output_names=["output_logits"],
+        dynamic_axes={
+            "input_image": {0: "batch"},
+            "output_logits": {0: "batch"}
+        },
+        opset_version=17,  # use latest stable opset
+        do_constant_folding=True,
+        verbose=False
     )
 
-    print(Fore.GREEN + f"✅ Model successfully converted to ONNX → {ONNX_PATH}" + Style.RESET_ALL)
+    print(Fore.GREEN + f"✅ Successfully converted to ONNX → {ONNX_PATH}" + Style.RESET_ALL)
+    print(Fore.CYAN + "💡 You can now load it with ONNX Runtime or TensorRT for deployment." + Style.RESET_ALL)
 
-# ==========================================
-# MAIN
-# ==========================================
+
+# ==========================================================
+# OPTIONAL: ONNX RUNTIME VALIDATION
+# ==========================================================
+def validate_onnx_runtime():
+    try:
+        import onnxruntime as ort
+        import numpy as np
+
+        print(Fore.YELLOW + "\n🔍 Validating exported ONNX model..." + Style.RESET_ALL)
+        ort_session = ort.InferenceSession(ONNX_PATH)
+
+        dummy_input = np.random.randn(1, 3, IMG_SIZE, IMG_SIZE).astype(np.float32)
+        outputs = ort_session.run(None, {"input_image": dummy_input})
+
+        print(Fore.GREEN + f"✅ ONNX model ran successfully — Output shape: {outputs[0].shape}" + Style.RESET_ALL)
+
+    except ImportError:
+        print(Fore.RED + "⚠️  onnxruntime not installed. Skipping validation. Run: pip install onnxruntime" + Style.RESET_ALL)
+    except Exception as e:
+        print(Fore.RED + f"❌ Validation failed: {str(e)}" + Style.RESET_ALL)
+
+
+# ==========================================================
+# MAIN ENTRY
+# ==========================================================
 if __name__ == "__main__":
-    convert_model_to_onnx()
+    convert_to_onnx()
+    validate_onnx_runtime()
