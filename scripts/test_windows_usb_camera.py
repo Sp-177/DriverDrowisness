@@ -1,158 +1,187 @@
+# ==========================================================
+# 🎥 REAL-TIME DRIVER DROWSINESS DETECTION (USB CAMERA)
+# Model: DrwoisnessCNN_Pro
+# Author: Shubham Patel (NIT Raipur)
+# ==========================================================
+
 import cv2
 import torch
 import torch.nn as nn
-from torchvision import transforms
-from PIL import Image
+import torch.nn.functional as F
 import numpy as np
-from colorama import Fore, Style
-import time
-import winsound  # for buzzer alert on Windows
+from torchvision import transforms
+from time import time
 
-# =======================================================
-# CONFIG
-# =======================================================
-MODEL_PATH = "models/DrwoisnessCNN_Pro.pth"
-IMG_SIZE = 128
-CLASS_NAMES = [
-    "DangerousDriving",
-    "Distracted",
-    "Drinking",
-    "SafeDriving",
-    "SleepyDriving",
-    "Yawn"
-]
+# ==========================================================
+# 🧠 MODEL DEFINITION (exactly same as training)
+# ==========================================================
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.fc1 = nn.Linear(channels, channels // reduction)
+        self.fc2 = nn.Linear(channels // reduction, channels)
 
-ALERT_FREQ = 1200  # Hz
-ALERT_DURATION = 600  # ms
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = F.adaptive_avg_pool2d(x, 1).view(b, c)
+        y = F.relu(self.fc1(y))
+        y = torch.sigmoid(self.fc2(y)).view(b, c, 1, 1)
+        return x * y
 
-# =======================================================
-# MODEL DEFINITION
-# =======================================================
-class DrwoisnessCNN_Pro(nn.Module):
-    def __init__(self, num_classes=6):
-        super(DrwoisnessCNN_Pro, self).__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2, 2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2, 2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d(2, 2),
-            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(), nn.MaxPool2d(2, 2)
+
+class CBAM(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.channel_att = SEBlock(channels, reduction)
+        self.spatial_att = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid()
         )
 
+    def forward(self, x):
+        x = self.channel_att(x)
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        spatial = self.spatial_att(torch.cat([avg_out, max_out], dim=1))
+        return x * spatial
+
+
+class DrowsinessCNN_Pro(nn.Module):
+    def __init__(self, num_classes=6, dropout=0.4):
+        super().__init__()
+        def conv_block(in_ch, out_ch, pool=True):
+            layers = [
+                nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            ]
+            if pool:
+                layers.append(nn.MaxPool2d(2, 2))
+            return nn.Sequential(*layers)
+
+        self.features = nn.Sequential(
+            conv_block(3, 32),
+            CBAM(32),
+            conv_block(32, 64),
+            CBAM(64),
+            conv_block(64, 128),
+            CBAM(128),
+            conv_block(128, 256),
+            CBAM(256)
+        )
+
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(256 * (IMG_SIZE // 16) * (IMG_SIZE // 16), 512),
-            nn.ReLU(),
-            nn.Linear(512, num_classes)
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(128),
+            nn.Dropout(dropout / 2),
+            nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
         x = self.features(x)
-        x = torch.flatten(x, 1)
+        x = self.gap(x).view(x.size(0), -1)
         return self.classifier(x)
 
+# ==========================================================
+# ⚙️ SETUP
+# ==========================================================
+MODEL_PATH = "models/DrwoisnessCNN_Pro.pth"   # trained model path
+IMG_SIZE = 128
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# =======================================================
-# LOAD MODEL
-# =======================================================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = DrwoisnessCNN_Pro(num_classes=len(CLASS_NAMES)).to(device)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+# Load model
+model = DrowsinessCNN_Pro(num_classes=6)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+model.to(DEVICE)
 model.eval()
-print(Fore.GREEN + f"✅ Model loaded successfully from {MODEL_PATH}" + Style.RESET_ALL)
+print(f"✅ Model loaded successfully on {DEVICE}")
 
-# =======================================================
-# TRANSFORMS
-# =======================================================
+# EXACT CLASS NAMES (6)
+CLASS_NAMES = [
+    "DangerousDriving","Distracted",
+
+"Drinking",
+"SafeDriving",
+"SleepyDriving",
+"Yawn "
+]
+
+# Image transformation
 transform = transforms.Compose([
+    transforms.ToPILImage(),
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
-# =======================================================
-# FACE DETECTOR
-# =======================================================
+# Load face detector
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
-# =======================================================
-# CAMERA INIT
-# =======================================================
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-cap.set(3, 640)
-cap.set(4, 480)
-
+# ==========================================================
+# 🎥 REAL-TIME INFERENCE LOOP
+# ==========================================================
+cap = cv2.VideoCapture(0)   # 0 = USB webcam
 if not cap.isOpened():
-    print(Fore.RED + "❌ Could not open webcam. Check USB connection." + Style.RESET_ALL)
+    print("❌ Cannot access camera")
     exit()
 
-print(Fore.CYAN + "🎥 Starting Driver Drowsiness Detection (Pro Version)" + Style.RESET_ALL)
-print(Fore.YELLOW + "Press 'Q' to quit." + Style.RESET_ALL)
+prev_time = time()
+fps = 0
 
-# =======================================================
-# REAL-TIME LOOP
-# =======================================================
-prev_label = ""
-alert_active = False
-alert_cooldown = 0
+print("🎬 Starting real-time detection... Press 'q' to quit.")
 
 while True:
     ret, frame = cap.read()
     if not ret:
-        print(Fore.RED + "[ERROR] Frame capture failed!" + Style.RESET_ALL)
+        print("❌ Frame capture failed")
         break
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.2, 5, minSize=(60, 60))
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
     for (x, y, w, h) in faces:
-        face_img = frame[y:y+h, x:x+w]
-        if face_img.size == 0:
+        roi_color = frame[y:y+h, x:x+w]
+        if roi_color.size == 0:
             continue
 
         # Preprocess
-        img_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
-        img_pil = Image.fromarray(img_rgb)
-        img_tensor = transform(img_pil).unsqueeze(0).to(device)
+        img = cv2.cvtColor(roi_color, cv2.COLOR_BGR2RGB)
+        img = transform(img).unsqueeze(0).to(DEVICE)
 
-        # Predict
+        # Prediction
         with torch.no_grad():
-            outputs = model(img_tensor)
-            probs = torch.softmax(outputs, dim=1)
-            confidence, predicted = probs.max(1)
-            label = CLASS_NAMES[predicted.item()]
-            conf = confidence.item()
+            outputs = model(img)
+            _, pred = torch.max(outputs, 1)
+            label = CLASS_NAMES[pred.item()]
 
-        # Determine color and alert
-        if label in ["SleepyDriving", "Yawn"]:
-            color = (0, 0, 255)
-            status_text = "⚠️ DROWSY - Take a Break!"
-            if not alert_active and time.time() - alert_cooldown > 3:
-                winsound.Beep(ALERT_FREQ, ALERT_DURATION)
-                alert_active = True
-                alert_cooldown = time.time()
-        elif label in ["Distracted", "Drinking"]:
-            color = (0, 165, 255)
-            status_text = "⚠️ DISTRACTED - Stay Focused!"
-            alert_active = False
-        else:
+        # Visual color logic
+        if label.lower().startswith("neutral"):
             color = (0, 255, 0)
-            status_text = "✅ SAFE DRIVING"
-            alert_active = False
+        elif "sleep" in label.lower() or "yawn" in label.lower():
+            color = (0, 0, 255)
+        else:
+            color = (0, 255, 255)
 
-        # Draw UI
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        cv2.putText(frame, f"{label} ({conf*100:.1f}%)", (x, y - 10),
+        # Draw bounding box & text
+        cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+        cv2.putText(frame, label, (x, y-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-        cv2.rectangle(frame, (10, 20), (400, 50), (0, 0, 0), -1)
-        cv2.putText(frame, status_text, (20, 45),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+    # FPS
+    curr_time = time()
+    fps = 1 / (curr_time - prev_time)
+    prev_time = curr_time
+    cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
 
-    cv2.imshow("Driver Drowsiness Detection (Pro)", frame)
+    cv2.imshow("Driver Drowsiness Detection — DrwoisnessCNN_Pro", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 cap.release()
 cv2.destroyAllWindows()
-print(Fore.BLUE + "🛑 Camera closed. Detection stopped." + Style.RESET_ALL)
+print("👋 Detection stopped.")

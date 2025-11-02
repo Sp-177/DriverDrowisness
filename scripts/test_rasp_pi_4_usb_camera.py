@@ -1,15 +1,41 @@
+# ==========================================================
+# 🚗 DRIVER DROWSINESS DETECTION — Raspberry Pi 4 (Live)
+# Model: driver_drowisness.onnx
+# Author: Shubham Patel (NIT Raipur)
+# ==========================================================
+
 import cv2
 import numpy as np
-from PIL import Image
 import onnxruntime as ort
+import RPi.GPIO as GPIO
 import time
+from datetime import datetime
 
-# =======================================================
-# CONFIG
-# =======================================================
-MODEL_PATH = "models/DrwoisnessCNN_Pro.onnx"
-IMG_SIZE = 128
-CLASS_NAMES = [
+# ==========================================================
+# 🔧 GPIO SETUP
+# ==========================================================
+LED_GREEN = 17   # Safe
+LED_YELLOW = 27  # Distracted / Yawn
+LED_RED = 22     # Sleepy / Dangerous
+BUZZER = 23      # Buzzer
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+for pin in [LED_GREEN, LED_YELLOW, LED_RED, BUZZER]:
+    GPIO.setup(pin, GPIO.OUT)
+    GPIO.output(pin, GPIO.LOW)
+
+# ==========================================================
+# 🧩 ONNX MODEL LOADING
+# ==========================================================
+MODEL_PATH = "driver_drowisness.onnx"
+
+print("[INFO] Loading ONNX model...")
+session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+input_name = session.get_inputs()[0].name
+print("[INFO] Model loaded successfully.")
+
+CLASSES = [
     "DangerousDriving",
     "Distracted",
     "Drinking",
@@ -18,99 +44,138 @@ CLASS_NAMES = [
     "Yawn"
 ]
 
-# =======================================================
-# LOAD MODEL (ONNX)
-# =======================================================
-print("[INFO] Loading ONNX model...")
-session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-input_name = session.get_inputs()[0].name
-print(f"[OK] Model loaded: {MODEL_PATH}")
-
-# =======================================================
-# PREPROCESS FUNCTION
-# =======================================================
-def preprocess(image_pil):
-    image_pil = image_pil.resize((IMG_SIZE, IMG_SIZE))
-    img = np.asarray(image_pil).astype(np.float32) / 255.0
-    img = (img - 0.5) / 0.5  # normalize [-1,1]
-    img = np.transpose(img, (2, 0, 1))  # HWC → CHW
-    img = np.expand_dims(img, axis=0)
-    return img
-
-# =======================================================
-# CAMERA SETUP (USB CAM)
-# =======================================================
+# ==========================================================
+# 📷 CAMERA INITIALIZATION
+# ==========================================================
 cap = cv2.VideoCapture(0)
-cap.set(3, 640)
-cap.set(4, 480)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 if not cap.isOpened():
-    print("[ERROR] Cannot access USB camera. Check connection.")
-    exit()
+    raise RuntimeError("❌ Could not access camera. Check USB connection.")
 
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-print("[INFO] Camera ready. Press 'q' to quit.")
+print("[INFO] Camera initialized successfully.")
 
-# =======================================================
-# MAIN LOOP
-# =======================================================
-last_alert = 0
-ALERT_COOLDOWN = 3  # seconds
+# ==========================================================
+# 📡 FIREBASE (COMMENTED OUT)
+# ==========================================================
+"""
+import firebase_admin
+from firebase_admin import credentials, db
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("[WARN] Frame capture failed!")
-        continue
+cred = credentials.Certificate("path/to/firebase-key.json")
+firebase_admin.initialize_app(cred, {
+    "databaseURL": "https://your-project.firebaseio.com/"
+})
+ref = db.reference("driver_status")
+"""
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.2, 5, minSize=(60, 60))
+def send_to_firebase(state):
+    """
+    Uncomment firebase block above and ref.push() below
+    to enable realtime alert sync.
+    """
+    data = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "state": state,
+        "caution": "Driver inactive or same state for long!"
+    }
+    # ref.push(data)
+    print("[Firebase] Would send:", data)
 
-    for (x, y, w, h) in faces:
-        face = frame[y:y+h, x:x+w]
-        if face.size == 0:
+# ==========================================================
+# ⚡ GPIO CONTROL FUNCTIONS
+# ==========================================================
+def set_leds(green=False, yellow=False, red=False):
+    GPIO.output(LED_GREEN, GPIO.HIGH if green else GPIO.LOW)
+    GPIO.output(LED_YELLOW, GPIO.HIGH if yellow else GPIO.LOW)
+    GPIO.output(LED_RED, GPIO.HIGH if red else GPIO.LOW)
+
+def buzz(freq_hz=3, duration=0.5):
+    """Generate buzzer beep of given frequency and duration."""
+    if freq_hz <= 0:
+        return
+    period = 1.0 / freq_hz
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        GPIO.output(BUZZER, GPIO.HIGH)
+        time.sleep(period / 2)
+        GPIO.output(BUZZER, GPIO.LOW)
+        time.sleep(period / 2)
+
+# ==========================================================
+# 🧠 INFERENCE LOOP
+# ==========================================================
+prev_state = None
+last_alert_time = time.time()
+
+print("[INFO] Starting live detection... (press 'q' to quit)")
+
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("[WARN] Frame capture failed, retrying...")
             continue
 
-        img_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        img_pil = Image.fromarray(img_rgb)
-        img_tensor = preprocess(img_pil)
+        # -------- Preprocessing --------
+        img = cv2.resize(frame, (224, 224))
+        img = img.astype(np.float32) / 255.0
+        img = np.transpose(img, (2, 0, 1))
+        img = np.expand_dims(img, axis=0)
 
-        # Run inference
-        outputs = session.run(None, {input_name: img_tensor})[0]
-        probs = np.exp(outputs) / np.sum(np.exp(outputs))
-        pred_idx = np.argmax(probs)
-        label = CLASS_NAMES[pred_idx]
-        conf = probs[0][pred_idx]
+        # -------- Inference --------
+        preds = session.run(None, {input_name: img})[0]
+        state = CLASSES[np.argmax(preds)]
 
-        # Alert & color logic
-        if label in ["SleepyDriving", "Yawn"]:
-            color = (0, 0, 255)
-            status_text = f"⚠️ DROWSY ({conf*100:.1f}%)"
-            if time.time() - last_alert > ALERT_COOLDOWN:
-                print("[ALERT] Drowsiness detected!")
-                last_alert = time.time()
-        elif label in ["Distracted", "Drinking"]:
-            color = (0, 165, 255)
-            status_text = f"⚠️ DISTRACTED ({conf*100:.1f}%)"
-        else:
-            color = (0, 255, 0)
-            status_text = f"✅ SAFE ({conf*100:.1f}%)"
+        # -------- Display --------
+        color_map = {
+            "SafeDriving": (0, 255, 0),
+            "Distracted": (0, 255, 255),
+            "Drinking": (255, 255, 0),
+            "Yawn": (0, 165, 255),
+            "SleepyDriving": (0, 0, 255),
+            "DangerousDriving": (0, 0, 128),
+        }
+        cv2.putText(frame, f"State: {state}", (20, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, color_map.get(state, (255, 255, 255)), 2)
+        cv2.imshow("Driver Drowsiness Detection", frame)
 
-        # Draw rectangle + label
-        cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-        cv2.putText(frame, label, (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+        # -------- State Logic --------
+        current_time = time.time()
+        if state != prev_state:
+            prev_state = state
+            last_alert_time = current_time
 
-        # Status bar
-        cv2.rectangle(frame, (10, 20), (380, 50), (0, 0, 0), -1)
-        cv2.putText(frame, status_text, (20, 45),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+            # SAFE
+            if state == "SafeDriving":
+                set_leds(green=True)
+                buzz(1, 0.1)
 
-    cv2.imshow("Drowsiness Detection (ONNX-RPi)", frame)
+            # MID ALERTS
+            elif state in ["Distracted", "Drinking", "Yawn"]:
+                set_leds(yellow=True)
+                buzz(3, 0.4)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+            # HIGH ALERT
+            elif state in ["SleepyDriving", "DangerousDriving"]:
+                set_leds(red=True)
+                buzz(8, 1.0)
 
-cap.release()
-cv2.destroyAllWindows()
-print("[INFO] Camera closed.")
+        # Send Firebase alert if same state > 15s
+        elif current_time - last_alert_time > 15:
+            send_to_firebase(state)
+            last_alert_time = current_time
+
+        # Exit key
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+except KeyboardInterrupt:
+    print("\n[INFO] Interrupted by user. Cleaning up...")
+
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
+    GPIO.cleanup()
+    print("[INFO] GPIO released. Program terminated successfully.")
